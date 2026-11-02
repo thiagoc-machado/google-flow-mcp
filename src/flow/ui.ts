@@ -18,6 +18,19 @@ export function iconButton(page: Page, icon: IconName): Locator {
   return page.locator('button').filter({ hasText: new RegExp(ICON[icon]) });
 }
 
+export async function clickSettingsTrigger(page: Page): Promise<void> {
+  const trigger = await firstInRegion(
+    page,
+    page.getByRole('button', { name: /^(?:Settings trigger|Configurações)$/ }),
+    'bottom-right',
+  );
+  if (trigger) {
+    await trigger.click({ timeout: 10_000 });
+    return;
+  }
+  await iconButton(page, 'settings').first().click({ timeout: 10_000 });
+}
+
 // Matches a button by its accessible name (aria-label or text) — survives icon ligature renames.
 export function namedButton(page: Page, key: LabelKey, mode: LabelMode = 'contains'): Locator {
   return page.getByRole('button', { name: label(key, mode) });

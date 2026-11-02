@@ -2,18 +2,32 @@
 // account, so every label carries both; matchers are built from this table, never inlined elsewhere.
 
 export const LABELS = {
-  agentSettings: ['에이전트 설정', 'Agent settings'],
-  approve: ['승인', 'Approve', 'Accept'],
-  never: ['안 함', 'Never'],
-  save: ['저장', 'Save'],
-  clearPrompt: ['프롬프트 지우기', 'Clear prompt'],
+  agentSettings: ['에이전트 설정', 'Agent settings', 'Configurações do agente'],
+  approve: ['승인', 'Approve', 'Accept', 'Aprovar', 'Confirmar'],
+  never: ['안 함', 'Never', 'Nunca'],
+  save: ['저장', 'Save', 'Salvar'],
+  clearPrompt: ['프롬프트 지우기', 'Clear prompt', 'Apagar comando'],
   newSession: ['새로운 세션', 'New session'],
-  uploadMedia: ['미디어 업로드', 'Upload media'],
+  uploadMedia: ['미디어 업로드', 'Upload media', 'Enviar mídia', 'Fazer upload de mídia', 'Carregar mídia'],
   // Composer attach button. Identified by accessible name, not by icon ligature: Flow renamed the
   // ligature add_2 → add (2026-09-05), and the top bar has its own 'add' button that .first() would win.
-  attachToPrompt: ['프롬프트 상자에 소재 추가', 'prompt box'],
+  attachToPrompt: [
+    '프롬프트 상자에 소재 추가',
+    'prompt box',
+    'Adicionar mídia ao prompt',
+    'Adicionar mídia à caixa de prompt',
+    'Adicionar mídia à caixa de texto',
+    'Adicionar elementos à caixa de comando',
+    'Add media to prompt',
+  ],
   // Asset picker confirm button — Flow added this step, selecting the item alone no longer attaches it (2026-09-05)
-  addToPrompt: ['프롬프트에 추가', 'Add to prompt'],
+  addToPrompt: [
+    '프롬프트에 추가',
+    'Add to prompt',
+    'Adicionar ao prompt',
+    'Adicionar à solicitação',
+    'Incluir no comando',
+  ],
   generating: ['생성 중', '만드는 중', 'Generating', 'generating', 'scheduled', 'queue'],
   policyBlocked: ['정책을 위반', '유해 콘텐츠', "violates? (?:Google'?s )?polic", 'harmful content'],
   // Scene Builder (Korean strings observed live 2026-09-02, see docs/scene-builder.md)

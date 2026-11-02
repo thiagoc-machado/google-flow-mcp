@@ -55,6 +55,11 @@ _none_
 
 | name | type | required | description |
 |---|---|---|---|
+| `version` | string | yes |  |
+| `build_id` | string | yes |  |
+| `entrypoint` | string | yes |  |
+| `process_id` | integer | yes |  |
+| `state_dir` | string | yes |  |
 | `connected` | boolean | yes |  |
 | `logged_in` | boolean | yes |  |
 | `url` | string | no |  |
@@ -143,7 +148,7 @@ Annotations: `idempotentHint`, `openWorldHint`
 
 ## flow_generate_video
 
-Generate one video through the Flow agent composer and download it. Spends Flow credits when auto_confirm=true. Call with auto_confirm=false first: the prompt, settings and reference image are prepared and verified but nothing is sent. resume=true skips the composer and only waits for / downloads an in-flight generation (after a crash or timeout).
+Generate one video through the Flow agent composer and download it. Spends Flow credits when auto_confirm=true. auto_confirm=false does not send a generation, but reference images may be uploaded into project media; registered references are reused on later calls. resume=true skips the composer and only waits for / downloads an in-flight generation (after a crash or timeout).
 
 Annotations: `destructiveHint`, `openWorldHint`
 
@@ -172,6 +177,7 @@ Annotations: `destructiveHint`, `openWorldHint`
 | `files` | string[] | yes | Absolute paths of downloaded outputs |
 | `media_ids` | string[] | yes | One per file: the 8-char digest that names it |
 | `references_attached` | number | yes |  |
+| `references_registered` | number | yes | Number of reference assets confirmed in project media and cached |
 | `approval_text` | string | yes | Text of the approval card if one was shown (contains the credit cost) |
 | `model` | string | yes |  |
 | `ratio` | string | yes |  |
@@ -182,7 +188,7 @@ Annotations: `destructiveHint`, `openWorldHint`
 
 ## flow_generate_image
 
-Generate images through the Flow agent composer (Nano Banana models) and download them. Spends Flow credits when auto_confirm=true; auto_confirm=false prepares and verifies without sending. resume=true only waits for / downloads an in-flight generation.
+Generate images through the Flow agent composer (Nano Banana models) and download them. Spends Flow credits when auto_confirm=true; auto_confirm=false does not send a generation, but may upload reference images into the project; registered references are reused on later calls. resume=true only waits for / downloads an in-flight generation.
 
 Annotations: `destructiveHint`, `openWorldHint`
 
@@ -210,6 +216,7 @@ Annotations: `destructiveHint`, `openWorldHint`
 | `files` | string[] | yes | Absolute paths of downloaded outputs |
 | `media_ids` | string[] | yes | One per file: the 8-char digest that names it |
 | `references_attached` | number | yes |  |
+| `references_registered` | number | yes | Number of reference assets confirmed in project media and cached |
 | `approval_text` | string | yes | Text of the approval card if one was shown (contains the credit cost) |
 | `model` | string | yes |  |
 | `ratio` | string | yes |  |

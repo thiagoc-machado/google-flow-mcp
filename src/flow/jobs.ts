@@ -21,6 +21,7 @@ export interface Job {
   baseline_tiles: number;
   // Media id (a digest of the file) and the tile title Flow gave it, so a later tool can find the tile again
   outputs?: { media_id: string; title: string }[];
+  discrepancy?: Record<string, unknown>;
   expected_clip_index?: number;
   result?: Record<string, unknown>;
   error?: string;

@@ -7,6 +7,7 @@ import type { Mutex } from './lib/mutex.js';
 // Built once per process by the CLI and handed to every tool; nothing loads config at import time
 export interface AppContext {
   config: Config;
+  runtime: { version: string; buildId: string; entrypoint: string; processId: number };
   log: Logger;
   session: BrowserSession;
   jobs: JobStore;

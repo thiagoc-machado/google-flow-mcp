@@ -9,7 +9,17 @@ import { IMAGE_MODELS, type ModelId, label, modelLabel } from './labels.js';
 import { type MediaKind, downloadedPrefixes, mediaTiles, tileUrl, tryDownload } from './media.js';
 import { ensureOnProject } from './project.js';
 import {
+  ReferenceCache,
+  ensureReferenceRegistered,
+  findExistingReference,
+  referenceAction,
+  uniqueReferenceIdentities,
+} from './reference-cache.js';
+import { referencePickerOptionIndex } from './reference-picker.js';
+import { assertNoExcessOutputs, isComposerActionText } from './output-count.js';
+import {
   bodyText,
+  clickSettingsTrigger,
   firstInRegion,
   iconButton,
   isVisible,
@@ -46,6 +56,7 @@ export type GenerateResult = {
   files: string[];
   media_ids: string[];
   references_attached: number;
+  references_registered: number;
   approval_text: string;
   model: string;
   ratio: string;
@@ -64,30 +75,94 @@ export async function generateMedia(ctx: AppContext, args: GenerateArgs): Promis
   const page = await ctx.session.ensureConnected();
   const shots = path.join(ctx.config.stateDir, 'screenshots');
   const modelName = modelLabel(args.model);
-  await ensureOnProject(page, args.projectUrl, ctx.log);
+  const projectId = await ensureOnProject(page, args.projectUrl, ctx.log);
+  ctx.log.info('project opened for generation', { project_id: projectId, url: page.url() });
 
   if (args.resume) return resumeGeneration(ctx, page, args, started);
 
   await ensureComposer(ctx, page, args.editMode);
+  ctx.log.info('composer ready', {
+    project_id: projectId,
+    kind: args.kind,
+    attached_before: (await composerMedia(page)).length,
+  });
   await applyDefaults(ctx, page, args.projectUrl, args.kind, args.ratio, modelName, args.count);
   await ensureComposer(ctx, page, args.editMode);
 
-  // Attachments are counted, not diffed: each one has to raise the composer's thumbnail count past what the
-  // previous references already put there. Anything already in the composer is the origin, so a stale thumbnail
-  // cannot make a reference look attached.
+  // auto_confirm=false prepares the prompt, including references. Cache the existing Flow asset so that
+  // preparing the same scene again reuses it instead of uploading a duplicate into the project.
   const origin = (await composerMedia(page)).length;
   let attached = 0;
-  for (const ref of args.referenceImages) {
+  let registered = 0;
+  const referenceCache = new ReferenceCache(path.join(ctx.config.stateDir, 'references.json'));
+  const referenceIdentities = uniqueReferenceIdentities(args.projectUrl, args.referenceImages);
+  const requestedReferences = referenceIdentities.length;
+  if (args.referenceImages.length > 0) {
+    await waitStable(async () => (await mediaTiles(page)).length, 3, 1000, 15);
+    ctx.log.info('reference inventory baseline', {
+      project_id: projectId,
+      project_media_count: (await mediaTiles(page)).length,
+    });
+  }
+  for (const identity of referenceIdentities) {
+    const ref = identity.resolvedPath;
     const want = origin + attached + 1;
-    if ((await attachReference(ctx, page, ref, want)) || (await attachReference(ctx, page, ref, want))) attached++;
+    let uploadedAttachment: ReferenceAttachmentResult | undefined;
+    const registration = await ensureReferenceRegistered(
+      referenceCache,
+      identity,
+      async () => {
+        const match = findExistingReference(await mediaTiles(page), ref);
+        if (match.status === 'unidentified') {
+          throw new FlowError(
+            'REFERENCE_ASSET_NOT_REGISTERED',
+            'a project image has the reference filename but Flow exposed no stable media ID; refusing to upload another copy',
+            { project_id: identity.projectId, path: identity.resolvedPath, pending: false },
+          );
+        }
+        return match.status === 'identified' ? match.remoteId : undefined;
+      },
+      async (markPending) => {
+        const beforeTiles = await mediaTiles(page);
+        uploadedAttachment = await uploadAndAttachReference(ctx, page, ref, want, beforeTiles, markPending);
+        if (!uploadedAttachment.remoteId) {
+          const current = await composerMedia(page);
+          throw new FlowError(
+            'REFERENCE_ASSET_NOT_REGISTERED',
+            current.length >= want
+              ? 'Flow shows the reference attached to the composer, but project media enumeration returned zero matching assets'
+              : 'reference upload was initiated, but project media enumeration returned no stable media ID',
+            {
+              project_id: identity.projectId,
+              path: identity.resolvedPath,
+              composer_attached: current.length >= want,
+              project_media_count: (await mediaTiles(page)).length,
+              pending: true,
+            },
+            await takeScreenshot(page, shots, 'reference-asset-not-registered'),
+          );
+        }
+        return uploadedAttachment.remoteId;
+      },
+    );
+    ctx.log.info(registration.uploaded ? 'reference registered after upload' : 'reference registration reused', {
+      project_id: projectId,
+      remote_id: registration.remoteId,
+      uploaded: registration.uploaded,
+    });
+    registered++;
+    const result = uploadedAttachment ?? (await attachExistingReference(ctx, page, ref, want, registration.remoteId));
+    if (result.attached) {
+      attached++;
+    }
   }
   // Sending without the reference makes the agent pick an arbitrary project image as the first frame: stop before credits
-  if (args.referenceImages.length > 0 && attached < args.referenceImages.length) {
+  if (requestedReferences > 0 && attached < requestedReferences) {
     await clearComposer(ctx, page);
     throw new FlowError(
       'REFERENCE_NOT_ATTACHED',
-      `${attached}/${args.referenceImages.length} reference images attached; nothing was sent`,
-      { attached, requested: args.referenceImages.length },
+      `${attached}/${requestedReferences} reference images attached; nothing was sent`,
+      { attached, requested: requestedReferences },
       await takeScreenshot(page, shots, 'reference-not-attached'),
     );
   }
@@ -101,11 +176,20 @@ export async function generateMedia(ctx: AppContext, args: GenerateArgs): Promis
 
   const base = {
     references_attached: attached,
+    references_registered: registered,
     model: modelName,
     ratio: args.ratio,
     prompt: instruction,
     ...(args.duration !== undefined ? { duration: args.duration } : {}),
   };
+
+  ctx.log.info('reference preparation complete', {
+    project_id: projectId,
+    references_attached: attached,
+    references_registered: registered,
+    project_media_count: (await mediaTiles(page)).length,
+    auto_confirm: args.autoConfirm,
+  });
 
   if (!args.autoConfirm) {
     const screenshot = await takeScreenshot(page, shots, `${args.kind}-ready`);
@@ -147,7 +231,18 @@ export async function generateMedia(ctx: AppContext, args: GenerateArgs): Promis
     APPROVAL_TIMEOUT_MS,
     true,
   );
-  const files = await awaitOutputs(ctx, page, args, job.job_id, job.baseline_tiles, bodyBefore, shots);
+  let files: { path: string; media_id: string; title: string }[];
+  try {
+    files = await awaitOutputs(ctx, page, args, job.job_id, job.baseline_tiles, bodyBefore, shots);
+  } catch (error) {
+    const details = error instanceof FlowError ? error.details : undefined;
+    ctx.jobs.update(job.job_id, {
+      phase: 'failed',
+      error: error instanceof Error ? error.message : String(error),
+      ...(details ? { discrepancy: details } : {}),
+    });
+    throw error;
+  }
   ctx.jobs.update(job.job_id, { outputs: files.map((f) => ({ media_id: f.media_id, title: f.title })) });
   const result: GenerateResult = {
     status: 'completed',
@@ -187,7 +282,12 @@ async function resumeGeneration(
   }
   if (job.phase === 'done' && job.result) {
     ctx.log.info('resume: job already completed', { job_id: job.job_id });
-    return { ...(job.result as unknown as GenerateResult), elapsed_ms: Date.now() - started };
+    const previous = job.result as unknown as GenerateResult;
+    return {
+      ...previous,
+      references_registered: previous.references_registered ?? 0,
+      elapsed_ms: Date.now() - started,
+    };
   }
   await pressEscape(page);
   const bodyBefore = await bodyText(page);
@@ -200,7 +300,18 @@ async function resumeGeneration(
     RESUME_APPROVAL_TIMEOUT_MS,
     false,
   );
-  const files = await awaitOutputs(ctx, page, args, job.job_id, job.baseline_tiles, bodyBefore, shots);
+  let files: { path: string; media_id: string; title: string }[];
+  try {
+    files = await awaitOutputs(ctx, page, args, job.job_id, job.baseline_tiles, bodyBefore, shots);
+  } catch (error) {
+    const details = error instanceof FlowError ? error.details : undefined;
+    ctx.jobs.update(job.job_id, {
+      phase: 'failed',
+      error: error instanceof Error ? error.message : String(error),
+      ...(details ? { discrepancy: details } : {}),
+    });
+    throw error;
+  }
   ctx.jobs.update(job.job_id, { outputs: files.map((f) => ({ media_id: f.media_id, title: f.title })) });
   const result: GenerateResult = {
     status: 'completed',
@@ -208,6 +319,7 @@ async function resumeGeneration(
     files: files.map((f) => f.path),
     media_ids: files.map((f) => f.media_id),
     references_attached: 0,
+    references_registered: 0,
     approval_text: approvalText,
     model: job.model,
     ratio: args.ratio,
@@ -220,7 +332,7 @@ async function resumeGeneration(
 }
 
 function composerInput(page: Page): Locator {
-  return page.locator('[contenteditable="true"]:visible, textarea:visible').first();
+  return page.locator('[role="textbox"]:visible, [contenteditable="true"]:visible, textarea:visible').first();
 }
 
 function buildInstruction(args: GenerateArgs, modelName: string, attached: number): string {
@@ -254,25 +366,49 @@ async function closeSidePanels(page: Page): Promise<void> {
   await pressEscape(page);
 }
 
-// Thumbnails attached to the composer sit in the bottom-right box; grid tiles and suggestion cards do not
-async function composerMedia(page: Page): Promise<string[]> {
+// Read thumbnails from the DOM subtree shared by the composer input and attach control. This survives
+// panel resizing, viewport changes, and Flow locale changes.
+export async function composerMedia(page: Page): Promise<string[]> {
   return page
-    .evaluate(() =>
-      // Attached thumbnails sit at the bottom-right of the composer. Match them by position and exclude
-      // Flow's own chrome, rather than whitelisting host names — the CDN for uploads changes (2026-09-05).
-      Array.from(document.querySelectorAll('img'))
-        .filter((i) => {
-          const r = i.getBoundingClientRect();
-          const src = i.currentSrc || i.src;
+    .evaluate(() => {
+      // Flow currently exposes this as DIV[role=textbox] in Portuguese. Older English
+      // layouts used contenteditable/textarea, so keep those fallbacks as well.
+      const input = document.querySelector<HTMLElement>('[role="textbox"], [contenteditable="true"], textarea');
+      if (!input) return [];
+      const visible = (el: Element): boolean => {
+        const style = getComputedStyle(el);
+        return style.display !== 'none' && style.visibility !== 'hidden';
+      };
+      const isComposerAction = (el: Element): boolean => {
+        const text = `${el.getAttribute('aria-label') || ''} ${el.textContent || ''}`;
+        return isComposerActionText(text);
+      };
+      let root: HTMLElement | null = null;
+      let candidate: HTMLElement | null = input;
+      while (candidate && candidate !== document.body) {
+        if (
+          candidate.querySelectorAll('img').length &&
+          Array.from(candidate.querySelectorAll('button,[role="button"]')).some(isComposerAction)
+        ) {
+          root = candidate;
+          break;
+        }
+        candidate = candidate.parentElement;
+      }
+      if (!root) return [];
+      return Array.from(root.querySelectorAll('img'))
+        .filter((img) => {
+          const rect = img.getBoundingClientRect();
+          const src = img.currentSrc || img.src;
           return (
-            r.width > 24 &&
-            r.y > window.innerHeight * 0.7 &&
-            r.x > window.innerWidth * 0.75 &&
+            visible(img) &&
+            rect.width > 24 &&
+            rect.height > 24 &&
             !/zero_states|\/website\/flow\/|\.svg(\?|$)/.test(src)
           );
         })
-        .map((i) => i.currentSrc || i.src),
-    )
+        .map((img) => img.currentSrc || img.src);
+    })
     .catch(() => []);
 }
 
@@ -342,7 +478,7 @@ async function applyDefaults(
   const key = `${projectUrl}|${kind}|${ratio}|${modelName}|${count}`;
   if (appliedDefaults.get(`${projectUrl}|${kind}`) === key) return;
   const pick = (loc: Locator): Locator => (kind === 'video' ? loc.last() : loc.first());
-  await iconButton(page, 'settings').first().click({ timeout: 10_000 });
+  await clickSettingsTrigger(page);
   await page.getByText(label('agentSettings')).first().waitFor({ timeout: 10_000 });
   await sleep(500);
   const never = page.getByText(label('never', 'exact')).first();
@@ -376,17 +512,87 @@ async function applyDefaults(
   ctx.log.info('agent defaults applied', { kind, ratio, model: modelName, count });
 }
 
-// attach button → Upload media → file chooser → click the uploaded item in the picker → confirm a new composer thumbnail
-async function attachReference(ctx: AppContext, page: Page, filePath: string, expected: number): Promise<boolean> {
+type ReferenceAttachmentResult = { attached: boolean; remoteId: string };
+
+async function composerAttachButton(page: Page): Promise<Locator> {
+  const localized = namedButton(page, 'attachToPrompt').first();
+  if (await isVisible(localized)) return localized;
+  // The material icon is language independent; .last() scopes to the composer control after the top-bar plus.
+  const byIcon = iconButton(page, 'add').last();
+  if (await isVisible(byIcon)) return byIcon;
+  throw new FlowError('UI_NOT_FOUND', 'composer attach control not found by localized label or add icon');
+}
+
+async function attachExistingReference(
+  ctx: AppContext,
+  page: Page,
+  filePath: string,
+  expected: number,
+  cachedRemoteId: string,
+): Promise<ReferenceAttachmentResult> {
   if (!fs.existsSync(filePath)) {
     throw new FlowError('REFERENCE_NOT_ATTACHED', `reference image not found: ${filePath}`, { path: filePath });
   }
   const shots = path.join(ctx.config.stateDir, 'screenshots');
-  // The retry after a false negative: the file did land, so uploading it again would only duplicate it
-  if ((await composerMedia(page)).length >= expected) return true;
-  // A previous failed attempt can leave the attach menu open; its overlay then swallows the click
-  // and the button reports aria-expanded="true" forever (observed 2026-09-05).
-  const attach = namedButton(page, 'attachToPrompt').first();
+  const before = await composerMedia(page);
+  if (before.length >= expected) return { attached: true, remoteId: cachedRemoteId };
+  const attach = await composerAttachButton(page);
+  if ((await attach.getAttribute('aria-expanded').catch(() => null)) === 'true') {
+    await pressEscape(page, 500);
+  }
+  await attach.click();
+  const reused = await selectCachedReference(page, cachedRemoteId, path.basename(filePath));
+  if (referenceAction(cachedRemoteId, reused) === 'refuse_duplicate') {
+    throw new FlowError(
+      'REFERENCE_NOT_ATTACHED',
+      'cached Flow reference is not available in the asset picker; refusing to upload a duplicate',
+      { path: filePath, remote_id: cachedRemoteId },
+      await takeScreenshot(page, shots, 'cached-reference-not-found'),
+    );
+  }
+  const confirmCached = labelButton(page, 'addToPrompt', 'exact').first();
+  try {
+    await confirmCached.waitFor({ timeout: 10_000 });
+  } catch {
+    throw new FlowError(
+      'REFERENCE_NOT_ATTACHED',
+      'Flow selected the cached asset but did not expose a recognized confirm-to-prompt control; refusing any upload retry',
+      { path: filePath, remote_id: cachedRemoteId, confirm_labels: 'Add to prompt / Incluir no comando' },
+      await takeScreenshot(page, shots, 'cached-reference-confirm-not-found'),
+    );
+  }
+  try {
+    await confirmCached.click({ timeout: 10_000 });
+  } catch {
+    const attachedAfterClick = await waitForComposerMedia(page, expected);
+    if (attachedAfterClick.length >= expected) return { attached: true, remoteId: cachedRemoteId };
+    throw new FlowError(
+      'REFERENCE_NOT_ATTACHED',
+      'Flow closed the asset picker but the cached reference did not appear in the composer; refusing to upload again',
+      { path: filePath, remote_id: cachedRemoteId, composer_attached: false },
+      await takeScreenshot(page, shots, 'cached-reference-attach-timeout'),
+    );
+  }
+  await sleep(800);
+  const attachedCached = await waitForComposerMedia(page, expected);
+  return { attached: attachedCached.length >= expected, remoteId: cachedRemoteId };
+}
+
+// Upload to Flow, confirm the picker action, then wait for both independent results:
+// a composer thumbnail and the registered project-media UUID.
+async function uploadAndAttachReference(
+  ctx: AppContext,
+  page: Page,
+  filePath: string,
+  expected: number,
+  projectMediaBefore: Awaited<ReturnType<typeof mediaTiles>>,
+  markPending: () => void,
+): Promise<ReferenceAttachmentResult> {
+  if (!fs.existsSync(filePath)) {
+    throw new FlowError('REFERENCE_NOT_ATTACHED', `reference image not found: ${filePath}`, { path: filePath });
+  }
+  const shots = path.join(ctx.config.stateDir, 'screenshots');
+  const attach = await composerAttachButton(page);
   if ((await attach.getAttribute('aria-expanded').catch(() => null)) === 'true') {
     await pressEscape(page, 500);
   }
@@ -394,34 +600,136 @@ async function attachReference(ctx: AppContext, page: Page, filePath: string, ex
   const upload = labelButton(page, 'uploadMedia').last();
   await upload.waitFor({ timeout: 10_000 });
   const [chooser] = await Promise.all([page.waitForEvent('filechooser', { timeout: 15_000 }), upload.click()]);
+  markPending();
   await chooser.setFiles(filePath);
   ctx.log.info('reference file chosen', { filePath });
-  // Flow 2026-09-05: the upload opens the right-hand asset picker with the new file already selected,
-  // so there is nothing to click in the list — only the '프롬프트에 추가' confirm attaches it to the composer.
   const confirm = labelButton(page, 'addToPrompt', 'exact').first();
   try {
     await confirm.waitFor({ timeout: 60_000 });
   } catch {
     await takeScreenshot(page, shots, 'ref-not-in-picker');
-    await pressEscape(page);
-    return false;
+    const projectId = await waitForNewProjectReference(page, filePath, projectMediaBefore, 15_000);
+    if (!projectId) {
+      throw await referenceAssetNotRegistered(ctx, page, filePath, expected, 'add-to-prompt control did not appear');
+    }
+    return { attached: (await composerMedia(page)).length >= expected, remoteId: projectId };
   }
   await confirm.click();
   await sleep(800);
+  const [media, projectId] = await Promise.all([
+    waitForComposerMedia(page, expected),
+    waitForNewProjectReference(page, filePath, projectMediaBefore, 60_000),
+  ]);
+  if (!projectId) {
+    throw await referenceAssetNotRegistered(
+      ctx,
+      page,
+      filePath,
+      expected,
+      media.length >= expected
+        ? 'composer attachment is visible but project enumeration returned zero matching assets'
+        : 'upload was initiated but no project media ID appeared',
+    );
+  }
+  if ((await page.locator('[role="dialog"]').count()) > 0) await pressEscape(page, 500);
+  return { attached: media.length >= expected, remoteId: projectId };
+}
+
+async function waitForNewProjectReference(
+  page: Page,
+  filePath: string,
+  before: Awaited<ReturnType<typeof mediaTiles>>,
+  timeoutMs: number,
+): Promise<string | undefined> {
+  const oldIds = new Set(before.map((tile) => tile.uuid).filter((id): id is string => Boolean(id)));
+  const filename = path.basename(filePath).trim().toLocaleLowerCase();
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const tile = (await mediaTiles(page)).find(
+      (item) =>
+        item.kind === 'image' &&
+        item.title.trim().toLocaleLowerCase() === filename &&
+        item.uuid &&
+        !oldIds.has(item.uuid),
+    );
+    if (tile?.uuid) return tile.uuid;
+    await sleep(1000);
+  }
+  return undefined;
+}
+
+async function referenceAssetNotRegistered(
+  ctx: AppContext,
+  page: Page,
+  filePath: string,
+  expected: number,
+  reason: string,
+): Promise<FlowError> {
+  const attached = (await composerMedia(page)).length >= expected;
+  const currentTiles = await mediaTiles(page);
+  const shots = path.join(ctx.config.stateDir, 'screenshots');
+  return new FlowError(
+    'REFERENCE_ASSET_NOT_REGISTERED',
+    attached
+      ? 'Flow shows the reference attached in the composer, but project media enumeration returned zero matching assets'
+      : 'Flow did not expose a stable project media ID for the uploaded reference; refusing any retry upload',
+    {
+      path: filePath,
+      composer_attached: attached,
+      project_media_count: currentTiles.length,
+      reason,
+      pending: true,
+    },
+    await takeScreenshot(page, shots, 'reference-asset-not-registered'),
+  );
+}
+
+async function waitForComposerMedia(page: Page, expected: number): Promise<string[]> {
   const t0 = Date.now();
+  let media: string[] = [];
   while (Date.now() - t0 < 15_000) {
     await sleep(1000);
-    // Landing is judged by the thumbnail count, not by a new URL appearing: re-uploading the same file makes
-    // Flow hand back the URL it already used, so the set difference stayed empty and a reference that was
-    // plainly attached (byblos-book 2026-09-05: the screenshot shows the thumbnail) was thrown away.
-    if ((await composerMedia(page)).length >= expected) {
-      if ((await page.locator('[role="dialog"]').count()) > 0) await pressEscape(page, 500);
-      if ((await composerMedia(page)).length >= expected) return true;
-    }
+    media = await composerMedia(page);
+    if (media.length >= expected) return media;
   }
-  await takeScreenshot(page, shots, 'ref-not-attached');
-  await pressEscape(page);
-  return false;
+  return media;
+}
+
+async function selectCachedReference(page: Page, remoteId: string, filename: string): Promise<boolean> {
+  const options = page.locator('[role="option"]:visible');
+  const targetUrl = (await mediaTiles(page)).find((tile) => tile.uuid === remoteId)?.url;
+  const inventory = await options
+    .evaluateAll((elements) =>
+      elements.map((element) => {
+        const el = element as HTMLElement;
+        const mediaIds: string[] = [];
+        const mediaUrls: string[] = [];
+        for (const node of [el, ...Array.from(el.querySelectorAll<HTMLElement>('*'))]) {
+          if (node.id) mediaIds.push(node.id);
+          for (const attribute of Array.from(node.attributes)) {
+            if (attribute.name.startsWith('data-') && attribute.value) mediaIds.push(attribute.value);
+          }
+          if (node instanceof HTMLImageElement) {
+            const url = node.currentSrc || node.src;
+            if (url) mediaUrls.push(url);
+          }
+        }
+        return {
+          label: `${el.getAttribute('aria-label') ?? ''} ${el.innerText ?? ''}`.trim(),
+          mediaIds: mediaIds.filter(Boolean),
+          mediaUrls,
+        };
+      }),
+    )
+    .catch(() => []);
+  const index = referencePickerOptionIndex(inventory, remoteId, filename, targetUrl);
+  if (index === undefined) return false;
+  try {
+    await options.nth(index).click();
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 // While an upload is still processing the composer silently ignores send; retry until the input empties
@@ -540,9 +848,11 @@ async function awaitOutputs(
   const tried = new Set<string>();
   const files: { path: string; media_id: string; title: string }[] = [];
   const t0 = Date.now();
+  let exactCountSince = 0;
+  let exactTileCount = -1;
   let lastShot = 0;
   let lastReload = Date.now();
-  while (Date.now() - t0 < ctx.config.generationTimeoutMs && files.length < args.count) {
+  while (Date.now() - t0 < ctx.config.generationTimeoutMs) {
     await sleep(ctx.config.pollIntervalMs);
     await failIfPolicyBlocked(ctx, page, bodyBefore);
     // Flow's SPA does not push finished generations into the grid — polling the DOM alone shows the
@@ -554,7 +864,37 @@ async function awaitOutputs(
       lastReload = Date.now();
     }
     const tiles = (await mediaTiles(page)).filter((t) => t.kind === args.kind);
-    const fresh = tiles.slice(0, Math.max(0, tiles.length - baselineTiles)).filter((t) => !tried.has(t.url));
+    const newlyCreated = tiles.slice(0, Math.max(0, tiles.length - baselineTiles));
+    try {
+      assertNoExcessOutputs(
+        args.count,
+        newlyCreated.length,
+        newlyCreated.flatMap((tile) => (tile.uuid ? [tile.uuid] : [])),
+      );
+    } catch {
+      const discrepancy = {
+        requested: args.count,
+        returned: newlyCreated.length,
+        media: newlyCreated.map((tile) => ({ uuid: tile.uuid, title: tile.title, kind: tile.kind })),
+      };
+      ctx.log.error('Flow output count mismatch', { job_id: jobId, ...discrepancy });
+      throw new FlowError(
+        'OUTPUT_COUNT_MISMATCH',
+        `Flow returned ${newlyCreated.length} output tiles for a request of ${args.count}; stopping without another generation`,
+        discrepancy,
+        await takeScreenshot(page, shots, 'output-count-mismatch'),
+      );
+    }
+    if (newlyCreated.length === args.count) {
+      if (exactTileCount !== newlyCreated.length) {
+        exactTileCount = newlyCreated.length;
+        exactCountSince = Date.now();
+      }
+    } else {
+      exactTileCount = newlyCreated.length;
+      exactCountSince = 0;
+    }
+    const fresh = newlyCreated.filter((t) => !tried.has(t.url));
     if (fresh.length > 0) {
       await sleep(3000); // the thumbnail appears before encoding finishes
       for (const tile of fresh) {
@@ -567,6 +907,14 @@ async function awaitOutputs(
         const { media_id, path: file, bytes } = attempt.file;
         // A re-signed address makes the same clip look like a new tile; the digest is what says otherwise
         if (files.some((f) => f.media_id === media_id)) continue;
+        if (files.length >= args.count) {
+          throw new FlowError(
+            'OUTPUT_COUNT_MISMATCH',
+            `Flow returned more than the requested ${args.count} ${args.kind} files; stopping before registering extras`,
+            { requested: args.count, returned_at_least: files.length + 1, media_id },
+            await takeScreenshot(page, shots, 'output-count-mismatch'),
+          );
+        }
         ctx.log.info(onDisk.has(media_id) ? 'output already downloaded' : 'output downloaded', {
           id: media_id,
           path: file,
@@ -576,13 +924,24 @@ async function awaitOutputs(
         files.push({ path: file, media_id, title: tile.title });
       }
     }
+    // Wait for the project grid to settle after the requested number is downloaded. Some Flow calls
+    // briefly expose one tile before the remaining outputs from the same request arrive.
+    if (files.length === args.count && exactCountSince > 0 && Date.now() - exactCountSince >= 15_000) return files;
     const minute = Math.floor((Date.now() - t0) / 60_000);
     if (minute > lastShot) {
       lastShot = minute;
       await takeScreenshot(page, shots, `wait-${minute}m`);
     }
   }
-  if (files.length === 0) {
+  if (files.length !== args.count) {
+    if (files.length > 0) {
+      throw new FlowError(
+        'OUTPUT_COUNT_MISMATCH',
+        `Flow produced ${files.length} downloadable ${args.kind} files for a request of ${args.count}`,
+        { requested: args.count, returned: files.length, media_ids: files.map((file) => file.media_id) },
+        await takeScreenshot(page, shots, 'output-count-mismatch'),
+      );
+    }
     throw new FlowError(
       'GENERATION_TIMEOUT',
       `no ${args.kind}/* media appeared within ${Math.round(ctx.config.generationTimeoutMs / 1000)}s`,

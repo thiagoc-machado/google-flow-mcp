@@ -35,6 +35,13 @@ export const projectOpen = defineTool({
     const projectId = await ensureOnProject(page, args.project_url, ctx.log);
     await waitStable(async () => (await mediaTiles(page)).length);
     const tiles = await mediaTiles(page);
+    ctx.log.info('project media inventory complete', {
+      project_id: projectId,
+      media_count: tiles.length,
+      videos: tiles.filter((t) => t.kind === 'video').length,
+      images: tiles.filter((t) => t.kind === 'image').length,
+      identified: tiles.filter((t) => Boolean(t.uuid)).length,
+    });
     return {
       project_id: projectId,
       url: page.url(),

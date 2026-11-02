@@ -9,6 +9,7 @@ export const generateOutput = {
   files: z.array(z.string()).describe('Absolute paths of downloaded outputs'),
   media_ids: z.array(z.string()).describe('One per file: the 8-char digest that names it'),
   references_attached: z.number(),
+  references_registered: z.number().describe('Number of reference assets confirmed in project media and cached'),
   approval_text: z.string().describe('Text of the approval card if one was shown (contains the credit cost)'),
   model: z.string(),
   ratio: z.string(),
@@ -23,7 +24,8 @@ export const generateVideo = defineTool({
   title: 'Generate a video',
   description:
     'Generate one video through the Flow agent composer and download it. Spends Flow credits when auto_confirm=true. ' +
-    'Call with auto_confirm=false first: the prompt, settings and reference image are prepared and verified but nothing is sent. ' +
+    'auto_confirm=false does not send a generation, but reference images may be uploaded into project media; ' +
+    'registered references are reused on later calls. ' +
     'resume=true skips the composer and only waits for / downloads an in-flight generation (after a crash or timeout).',
   input: {
     prompt: z

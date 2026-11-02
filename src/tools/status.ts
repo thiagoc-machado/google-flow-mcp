@@ -10,6 +10,11 @@ export const status = defineTool({
     'Report browser connection, login state, the current Flow project/scene, the running tool and in-flight jobs. Never touches the page.',
   input: {},
   output: {
+    version: z.string(),
+    build_id: z.string(),
+    entrypoint: z.string(),
+    process_id: z.number().int(),
+    state_dir: z.string(),
     connected: z.boolean(),
     logged_in: z.boolean(),
     url: z.string().optional(),
@@ -23,6 +28,11 @@ export const status = defineTool({
     const s = ctx.session.status();
     const loc = s.url ? parseFlowUrl(s.url) : null;
     return Promise.resolve({
+      version: ctx.runtime.version,
+      build_id: ctx.runtime.buildId,
+      entrypoint: ctx.runtime.entrypoint,
+      process_id: ctx.runtime.processId,
+      state_dir: ctx.config.stateDir,
       connected: s.connected,
       logged_in: s.connected ? isLoggedIn(ctx.session.getPage()) : false,
       ...(s.url !== undefined ? { url: s.url } : {}),

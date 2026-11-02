@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { RawCdp, findHungPages } from './browser/cdp.js';
@@ -25,14 +26,40 @@ Usage:
 `;
 
 export function buildContext(config: Config): AppContext {
+  const entrypoint = process.argv[1] ? path.resolve(process.argv[1]) : import.meta.url;
+  let buildId = 'unavailable';
+  try {
+    buildId = buildFingerprint(path.dirname(entrypoint));
+  } catch {
+    // Source-based callers can lack a physical entrypoint; the production CLI always has one.
+  }
   const log = createLogger({ level: config.logLevel, dir: path.join(config.stateDir, 'logs') });
   return {
     config,
+    runtime: { version: PACKAGE_VERSION, buildId, entrypoint, processId: process.pid },
     log,
     session: new BrowserSession(config, log),
     jobs: new JobStore(path.join(config.stateDir, 'jobs')),
     lock: new Mutex(),
   };
+}
+
+function buildFingerprint(root: string): string {
+  const files: string[] = [];
+  const visit = (directory: string): void => {
+    for (const item of fs.readdirSync(directory, { withFileTypes: true })) {
+      const file = path.join(directory, item.name);
+      if (item.isDirectory()) visit(file);
+      else if (item.isFile()) files.push(file);
+    }
+  };
+  visit(root);
+  const hash = crypto.createHash('sha256');
+  for (const file of files.sort()) {
+    hash.update(path.relative(root, file));
+    hash.update(fs.readFileSync(file));
+  }
+  return hash.digest('hex').slice(0, 16);
 }
 
 async function serve(): Promise<void> {
@@ -49,7 +76,14 @@ async function serve(): Promise<void> {
   process.on('SIGINT', () => shutdown('SIGINT'));
   process.stdin.on('end', () => shutdown('stdin closed'));
   await server.connect(new StdioServerTransport());
-  ctx.log.info('server ready', { version: PACKAGE_VERSION, cdpPort: ctx.config.cdpPort });
+  ctx.log.info('server ready', {
+    version: ctx.runtime.version,
+    build_id: ctx.runtime.buildId,
+    entrypoint: ctx.runtime.entrypoint,
+    process_id: ctx.runtime.processId,
+    state_dir: ctx.config.stateDir,
+    cdp_port: ctx.config.cdpPort,
+  });
 }
 
 function init(): void {

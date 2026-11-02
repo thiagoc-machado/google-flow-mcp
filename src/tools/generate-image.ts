@@ -9,7 +9,8 @@ export const generateImage = defineTool({
   title: 'Generate an image',
   description:
     'Generate images through the Flow agent composer (Nano Banana models) and download them. Spends Flow credits when auto_confirm=true; ' +
-    'auto_confirm=false prepares and verifies without sending. resume=true only waits for / downloads an in-flight generation.',
+    'auto_confirm=false does not send a generation, but may upload reference images into the project; registered references are reused on later calls. ' +
+    'resume=true only waits for / downloads an in-flight generation.',
   input: {
     prompt: z.string().min(1),
     model: z.enum(IMAGE_MODEL_IDS).default('nano-banana-pro'),

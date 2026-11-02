@@ -25,7 +25,7 @@ export function createLogger(opts: LoggerOptions): Logger {
   const write = (level: LogLevel, msg: string, data?: Record<string, unknown>): void => {
     if (LOG_LEVELS.indexOf(level) < threshold) return;
     const ts = new Date().toISOString();
-    const line = `${ts} ${level.toUpperCase().padEnd(5)} ${msg}${data ? ' ' + safeJson(data) : ''}`;
+    const line = `${ts} pid=${process.pid} ${level.toUpperCase().padEnd(5)} ${msg}${data ? ' ' + safeJson(data) : ''}`;
     process.stderr.write(line + '\n');
     if (dir) {
       const file = path.join(dir, `server-${ts.slice(0, 10)}.log`);

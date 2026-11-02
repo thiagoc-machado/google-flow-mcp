@@ -9,6 +9,7 @@ import { defineTool, runTool } from '../../src/server/tool.js';
 function ctx(): AppContext {
   return {
     config: { lockWaitMs: 50 } as AppContext['config'],
+    runtime: { version: 'test', buildId: 'test', entrypoint: 'test', processId: 1 },
     log: silentLogger,
     session: {} as AppContext['session'],
     jobs: {} as AppContext['jobs'],

@@ -2,5 +2,6 @@ node_modules/
 dist/
 coverage/
 *.log
+.google-flow-mcp.pid
 .DS_Store
 .env
