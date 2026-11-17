@@ -15,6 +15,8 @@ describe('labels', () => {
     expect(label('save', 'suffix').test('저장 안 함')).toBe(false);
     expect(label('sceneAdd').test('add_2장면에 추가')).toBe(true);
     expect(label('sceneAdd').test('Add to Scene')).toBe(true);
+    expect(label('addToPrompt', 'exact').test('Incluir no comando')).toBe(true);
+    expect(label('addToPrompt', 'exact').test('Add to prompt')).toBe(true);
   });
 
   it('policy regex matches Korean and English refusals', () => {

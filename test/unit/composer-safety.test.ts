@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { composerMedia } from '../../src/flow/composer.js';
+import { assertComposerClear, composerMedia } from '../../src/flow/composer.js';
 import { assertNoExcessOutputs, isComposerActionText } from '../../src/flow/output-count.js';
 import { referencePickerOptionIndex } from '../../src/flow/reference-picker.js';
 import { FlowError } from '../../src/lib/errors.js';
@@ -7,6 +7,16 @@ import { FlowError } from '../../src/lib/errors.js';
 afterEach(() => vi.unstubAllGlobals());
 
 describe('composer safety regressions', () => {
+  it('stops before adding references when a chip from an earlier request survives cleanup', () => {
+    expect(() => assertComposerClear([])).not.toThrow();
+    expect(() => assertComposerClear(['https://flow-content.google/image/stale-reference-id'])).toThrow(
+      expect.objectContaining({
+        code: 'REFERENCE_NOT_ATTACHED',
+        details: { composer_media_count: 1 },
+      }),
+    );
+  });
+
   it('recognizes the composer by stable localized control text, independent of panel geometry', () => {
     // Layout changes (panel height, window size, expanded settings) do not enter this selector decision.
     expect(isComposerActionText('prompt box')).toBe(true);
@@ -48,73 +58,60 @@ describe('composer safety regressions', () => {
     ).toBe(0);
   });
 
-  it.each([
-    ['prompt box', 1200],
-    ['프롬프트 상자에 소재 추가', 720],
-    ['arrow_forward', 480],
-  ])('finds composer thumbnails for locale/control %s at viewport height %i', async (controlText, height) => {
-    const body = {};
-    const image = {
-      currentSrc: 'https://flow.google.com/asb/reference-image',
-      src: 'https://flow.google.com/asb/reference-image',
-      getBoundingClientRect: () => ({ width: 80, height: 80, x: 5, y: height / 2 }),
-    };
-    const input: { parentElement: unknown; querySelectorAll: () => never[] } = {
-      parentElement: null,
-      querySelectorAll: () => [],
-    };
-    const button = { getAttribute: () => null, textContent: controlText };
-    const composer = {
-      parentElement: body,
-      querySelectorAll: (selector: string) => (selector === 'img' ? [image] : [button]),
-    };
-    input.parentElement = composer;
-    vi.stubGlobal('document', {
-      body,
-      querySelector: () => input,
-    });
-    vi.stubGlobal('getComputedStyle', () => ({ display: 'block', visibility: 'visible' }));
-    const page = {
-      evaluate: (fn: () => unknown) => Promise.resolve(fn()),
-    };
-
-    await expect(composerMedia(page as never)).resolves.toEqual(['https://flow.google.com/asb/reference-image']);
+  it('matches only the actual asset row when the UI also exposes project dropdown options', () => {
+    const assetRows = [
+      { label: 'Square in residential neighborho… Image', mediaIds: ['generated-id'] },
+      { label: '1.png_f5c28716.jpg Imagem', mediaIds: [] },
+    ];
+    expect(referencePickerOptionIndex(assetRows, 'project-id', '1.png_f5c28716.jpg')).toBe(1);
   });
 
-  it('does not mistake project-grid media for composer attachments when no composer action is in the subtree', async () => {
-    const body = {};
-    const input: { parentElement: unknown; querySelectorAll: () => never[] } = {
-      parentElement: null,
-      querySelectorAll: () => [],
+  it.each([
+    ['Português', 1200],
+    ['English', 720],
+    ['Korean', 480],
+  ])('finds composer chips by semantic DOM selector in %s at viewport height %i', async (_locale, height) => {
+    const image = {
+      currentSrc: 'https://flow-content.google/image/reference-id',
+      src: 'https://flow-content.google/image/reference-id',
+      getBoundingClientRect: () => ({ width: 50, height: 50, x: 5, y: height / 2 }),
     };
-    const projectGrid = {
-      parentElement: body,
-      querySelectorAll: (selector: string) =>
-        selector === 'img' ? [{}] : [{ getAttribute: () => null, textContent: 'Upload media' }],
+    vi.stubGlobal('document', {
+      querySelectorAll: (selector: string) => (selector === 'flow-base-prompt-box img.chip-image' ? [image] : []),
+    });
+    vi.stubGlobal('getComputedStyle', () => ({ display: 'inline', visibility: 'visible' }));
+    const page = { evaluate: (fn: () => unknown) => Promise.resolve(fn()) };
+
+    await expect(composerMedia(page as never)).resolves.toEqual(['https://flow-content.google/image/reference-id']);
+  });
+
+  it('does not mistake project-grid images for composer chips', async () => {
+    const gridImage = {
+      currentSrc: 'https://flow.google.com/asb/project-media',
+      src: 'https://flow.google.com/asb/project-media',
+      getBoundingClientRect: () => ({ width: 140, height: 250, x: 5, y: 10 }),
     };
-    input.parentElement = projectGrid;
-    vi.stubGlobal('document', { body, querySelector: () => input });
+    vi.stubGlobal('document', {
+      querySelectorAll: (selector: string) => (selector === 'img' ? [gridImage] : []),
+    });
     vi.stubGlobal('getComputedStyle', () => ({ display: 'block', visibility: 'visible' }));
     const page = { evaluate: (fn: () => unknown) => Promise.resolve(fn()) };
 
     await expect(composerMedia(page as never)).resolves.toEqual([]);
   });
 
-  it('queries the semantic textbox used by current Portuguese Flow UI', async () => {
-    const body = {};
-    const textbox = { parentElement: body, querySelectorAll: () => [] };
+  it('selects chips only inside Flow base prompt box', async () => {
     let selector = '';
     vi.stubGlobal('document', {
-      body,
-      querySelector: (value: string) => {
+      querySelectorAll: (value: string) => {
         selector = value;
-        return textbox;
+        return [];
       },
     });
     const page = { evaluate: (fn: () => unknown) => Promise.resolve(fn()) };
 
     await composerMedia(page as never);
-    expect(selector).toContain('[role="textbox"]');
+    expect(selector).toBe('flow-base-prompt-box img.chip-image');
   });
 
   it('allows an exact count and stops before registering a four-file response to count=1', () => {

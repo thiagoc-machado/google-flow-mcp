@@ -9,6 +9,7 @@ KILL := /bin/kill
 up:
 	@if [ -f "$(PID_FILE)" ] && $(KILL) -0 -- -$$(cat "$(PID_FILE)") 2>/dev/null; then \
 		echo "google-flow-mcp já está em execução (PID $$(cat "$(PID_FILE)"))."; \
+		node dist/cli.js open || echo "Não foi possível abrir Google Flow no Chrome." >&2; \
 	else \
 		rm -f "$(PID_FILE)"; \
 		command -v setsid >/dev/null 2>&1 || { echo "Erro: o comando setsid é necessário para make up." >&2; exit 1; }; \
@@ -17,6 +18,7 @@ up:
 		sleep 1; \
 		if $(KILL) -0 -- -$$(cat "$(PID_FILE)") 2>/dev/null; then \
 			echo "google-flow-mcp iniciado (PID $$(cat "$(PID_FILE)")). Log: $(LOG_FILE)"; \
+			node dist/cli.js open || echo "Não foi possível abrir Google Flow no Chrome." >&2; \
 		else \
 			echo "Não foi possível iniciar google-flow-mcp. Consulte $(LOG_FILE)." >&2; \
 			rm -f "$(PID_FILE)"; \

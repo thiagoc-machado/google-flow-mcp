@@ -82,6 +82,21 @@ describe('ReferenceCache', () => {
     expect(identityEnglish).toEqual(identityPortuguese);
   });
 
+  it('persists the stable picker selection ID separately from the project media ID', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flow-reference-cache-'));
+    const file = path.join(dir, 'style.png');
+    const cacheFile = path.join(dir, 'references.json');
+    fs.writeFileSync(file, 'bytes');
+    const identity = referenceIdentity('https://flow.google.com/project/abababab-abab-4bab-8bab-abababababab', file);
+    const cache = new ReferenceCache(cacheFile);
+    cache.set({ ...identity, remoteId: 'project-media-uuid', selectionId: 'composer-media-uuid' });
+
+    expect(new ReferenceCache(cacheFile).get(identity)).toMatchObject({
+      remoteId: 'project-media-uuid',
+      selectionId: 'composer-media-uuid',
+    });
+  });
+
   it('migrates legacy cache entries whose project URL contains a locale query', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flow-reference-cache-'));
     const file = path.join(dir, 'style.png');

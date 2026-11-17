@@ -1,0 +1,658 @@
+name: home-server
+
+x-common-env: &common-env
+  PUID: '1000'
+  PGID: '1000'
+  TZ: Europe/Madrid
+
+services:
+  qbittorrent:
+    image: lscr.io/linuxserver/qbittorrent:latest
+    container_name: qbittorrent
+    environment:
+      <<: *common-env
+      WEBUI_PORT: '8080'
+    volumes:
+      - /opt/appdata/qbittorrent:/config
+      - /mnt/storage/downloads:/downloads
+    ports:
+      - '8080:8080'
+      - '6881:6881'
+      - '6881:6881/udp'
+    restart: unless-stopped
+
+  prowlarr:
+    image: lscr.io/linuxserver/prowlarr:latest
+    container_name: prowlarr
+    environment:
+      <<: *common-env
+    volumes:
+      - /opt/appdata/prowlarr:/config
+    ports:
+      - '9696:9696'
+    restart: unless-stopped
+
+  jackett:
+    image: lscr.io/linuxserver/jackett:latest
+    container_name: jackett
+    environment:
+      <<: *common-env
+    volumes:
+      - /opt/appdata/jackett:/config
+      - /mnt/storage/downloads:/downloads
+    ports:
+      - '9117:9117'
+    restart: unless-stopped
+
+  sonarr:
+    image: lscr.io/linuxserver/sonarr:latest
+    container_name: sonarr
+    environment:
+      <<: *common-env
+    volumes:
+      - /opt/appdata/sonarr:/config
+      - /mnt/storage/series:/tv
+      - /mnt/storage/downloads:/downloads
+    ports:
+      - '8989:8989'
+    depends_on:
+      - qbittorrent
+      - prowlarr
+      - jackett
+    restart: unless-stopped
+
+  radarr:
+    image: lscr.io/linuxserver/radarr:latest
+    container_name: radarr
+    environment:
+      <<: *common-env
+    volumes:
+      - /opt/appdata/radarr:/config
+      - /mnt/storage/movies:/movies
+      - /mnt/storage/downloads:/downloads
+    ports:
+      - '7878:7878'
+    depends_on:
+      - qbittorrent
+      - prowlarr
+      - jackett
+    restart: unless-stopped
+
+  bazarr:
+    image: lscr.io/linuxserver/bazarr:latest
+    container_name: bazarr
+    environment:
+      <<: *common-env
+    volumes:
+      - /opt/appdata/bazarr:/config
+      - /mnt/storage/movies:/movies
+      - /mnt/storage/series:/tv
+    ports:
+      - '6767:6767'
+    depends_on:
+      - sonarr
+      - radarr
+    restart: unless-stopped
+
+  jellyfin:
+    image: jellyfin/jellyfin:latest
+    container_name: jellyfin
+    environment:
+      <<: *common-env
+    volumes:
+      - /opt/appdata/jellyfin:/config
+      - /mnt/storage/movies:/media/movies
+      - /mnt/storage/series:/media/series
+      - /mnt/storage/cristaos:/media/cristaos
+      - /mnt/storage/Livros:/media/livros
+      - /mnt/storage/Audio-livros:/media/Audio-livros
+    ports:
+      - '8096:8096'
+    restart: unless-stopped
+    group_add:
+      - "993"
+    devices:
+      - /dev/dri/renderD128:/dev/dri/renderD128
+
+  jellyseerr:
+    image: fallenbagel/jellyseerr:latest
+    container_name: jellyseerr
+    environment:
+      TZ: Europe/Madrid
+    volumes:
+      - /opt/appdata/jellyseerr:/app/config
+    ports:
+      - '5055:5055'
+    depends_on:
+      - jellyfin
+    restart: unless-stopped
+
+  pelagica:
+    image: kartoffelchipss/pelagica:latest
+    container_name: pelagica
+    environment:
+      TZ: Europe/Madrid
+    ports:
+      - '8097:80'
+    volumes:
+      - /opt/appdata/pelagica:/config
+    depends_on:
+      - jellyfin
+    restart: unless-stopped
+
+  adguard:
+    image: adguard/adguardhome:latest
+    container_name: adguard
+    volumes:
+      - /opt/appdata/adguard/work:/opt/adguardhome/work
+      - /opt/appdata/adguard/conf:/opt/adguardhome/conf
+    ports:
+      - '53:53/tcp'
+      - '53:53/udp'
+      - '3000:3000'
+      - '8083:80'
+    restart: unless-stopped
+
+  filebrowser:
+    image: filebrowser/filebrowser:latest
+    container_name: filebrowser
+    user: '1000:1000'
+    volumes:
+      - /mnt/storage:/srv
+      - /home/thiago/docker/filebrowser/config:/config
+      - /home/thiago/docker/filebrowser/database:/database
+    ports:
+      - '8082:80'
+    restart: unless-stopped
+
+  homeassistant:
+    image: ghcr.io/home-assistant/home-assistant:stable
+    container_name: homeassistant
+    network_mode: host
+    privileged: true
+    environment:
+      TZ: Europe/Madrid
+    volumes:
+      - /opt/appdata/homeassistant:/config
+      - /etc/localtime:/etc/localtime:ro
+    restart: unless-stopped
+
+ # homarr:
+ #   image: ghcr.io/ajnart/homarr:latest
+ #   container_name: homarr
+ #   environment:
+ #     <<: *common-env
+ #   ports:
+ #     - '7575:7575'
+ #   volumes:
+ #     - /opt/appdata/homarr/configs:/app/data/configs
+ #     - /opt/appdata/homarr/icons:/app/public/icons
+ #     - /opt/appdata/homarr/data:/data
+ #     - /var/run/docker.sock:/var/run/docker.sock
+ #   restart: unless-stopped
+
+  homarr:
+    image: ghcr.io/homarr-labs/homarr:latest
+    container_name: homarr
+    environment:
+      SECRET_ENCRYPTION_KEY: ${HOMARR_SECRET_ENCRYPTION_KEY}
+      TZ: Europe/Madrid
+    ports:
+      - '7575:7575'
+    volumes:
+      - /opt/appdata/homarr-v2:/appdata
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    restart: unless-stopped
+
+  glances:
+    profiles:
+      - monitoring
+    image: nicolargo/glances:latest-full
+    container_name: glances
+    pid: host
+    ports:
+      - '61208:61208'
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      GLANCES_OPT: '-w'
+    restart: unless-stopped
+
+  scrutiny:
+    profiles:
+      - monitoring
+    image: ghcr.io/analogj/scrutiny:latest-omnibus
+    container_name: scrutiny
+    ports:
+      - '8081:8080'
+      - '8086:8086'
+    volumes:
+      - /run/udev:/run/udev:ro
+      - /opt/appdata/scrutiny/config:/opt/scrutiny/config
+      - /opt/appdata/scrutiny/influxdb:/opt/scrutiny/influxdb
+    devices:
+      - /dev/sda:/dev/sda
+      - /dev/sdb:/dev/sdb
+      - /dev/sdc:/dev/sdc
+    cap_add:
+      - SYS_RAWIO
+    privileged: true
+    restart: unless-stopped
+
+  audiobookshelf:
+    profiles:
+      - books
+    image: ghcr.io/advplyr/audiobookshelf:latest
+    container_name: audiobookshelf
+    ports:
+      - '13378:80'
+    volumes:
+      - /mnt/storage/Audio-livros:/audiobooks
+      - /mnt/storage/Livros:/books
+      - /opt/appdata/audiobookshelf:/config
+      - /opt/appdata/audiobookshelf/metadata:/metadata
+    restart: unless-stopped
+
+  lazylibrarian:
+    profiles:
+      - books
+    image: lscr.io/linuxserver/lazylibrarian:latest
+    container_name: lazylibrarian
+    environment:
+      <<: *common-env
+    ports:
+      - '5299:5299'
+    volumes:
+      - /opt/appdata/lazylibrarian:/config
+      - /mnt/storage/Livros:/books
+      - /mnt/storage/Audio-livros:/audiobooks
+      - /mnt/storage/downloads:/downloads
+    depends_on:
+      - qbittorrent
+      - jackett
+      - prowlarr
+    restart: unless-stopped
+
+  kavita:
+    profiles:
+      - books
+    image: jvmilazz0/kavita:latest
+    container_name: kavita
+    environment:
+      <<: *common-env
+    volumes:
+      - /opt/appdata/kavita:/kavita/config
+      - /mnt/storage/Livros:/books
+      - /mnt/storage/mangas:/manga
+      - /mnt/storage/hqs:/comics
+    ports:
+      - '5000:5000'
+    restart: unless-stopped
+
+  immich-server:
+    profiles:
+      - photos
+    image: ghcr.io/immich-app/immich-server:release
+    container_name: immich_server
+    volumes:
+      - /mnt/storage/photos:/usr/src/app/upload
+    environment:
+      DB_HOSTNAME: immich_postgres
+      DB_USERNAME: immich
+      DB_PASSWORD: immich
+      DB_DATABASE_NAME: immich
+      REDIS_HOSTNAME: immich_redis
+      IMMICH_HOST: 0.0.0.0
+      IMMICH_PORT: '2283'
+      TZ: Europe/Madrid
+    ports:
+      - '2283:2283'
+    depends_on:
+      - immich_postgres
+      - immich_redis
+    restart: unless-stopped
+
+  immich_postgres:
+    profiles:
+      - photos
+    image: ghcr.io/immich-app/postgres:14-vectorchord0.4.3-pgvectors0.2.0
+    container_name: immich_postgres
+    environment:
+      POSTGRES_USER: immich
+      POSTGRES_PASSWORD: immich
+      POSTGRES_DB: immich
+    volumes:
+      - /opt/appdata/immich/postgres:/var/lib/postgresql/data
+    shm_size: 128mb
+    restart: unless-stopped
+
+  immich_redis:
+    profiles:
+      - photos
+    image: redis:7-alpine
+    container_name: immich_redis
+    restart: unless-stopped
+
+  immich-machine-learning:
+    profiles:
+      - photos
+    image: ghcr.io/immich-app/immich-machine-learning:release
+    container_name: immich_machine_learning
+    volumes:
+      - /opt/appdata/immich/model-cache:/cache
+    restart: unless-stopped
+
+  flaresolverr:
+    profiles:
+      - indexers-extra
+      - mindexer
+    image: ghcr.io/flaresolverr/flaresolverr:latest
+    container_name: flaresolverr
+    environment:
+      TZ: Europe/Madrid
+      LOG_LEVEL: info
+    ports:
+      - '8191:8191'
+    restart: unless-stopped
+
+  # Mindexer: uses the existing FlareSolverr and Prowlarr containers.
+  mindexer:
+    profiles:
+      - mindexer
+    build:
+      context: ./mindexer/mindexer
+      dockerfile: Dockerfile
+    container_name: mindexer
+    environment:
+      TZ: Europe/Madrid
+      PORT: '7006'
+      REDIS_HOST: mindexer-redis
+      REDIS_PORT: '6379'
+      FLARESOLVERR_ADDRESS: http://flaresolverr:8191
+      FLARESOLVERR_TIMEOUT: '45000'
+      FLARESOLVERR_MAX_TIMEOUT: '45000'
+      FLARESOLVERR_MAX_SESSIONS: '2'
+      FLARESOLVERR_SESSION_TTL: 15m
+      LOG_LEVEL: '1'
+      LOG_FORMAT: console
+    depends_on:
+      - mindexer-redis
+      - flaresolverr
+    mem_limit: 1024m
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
+  mindexer-redis:
+    profiles:
+      - mindexer
+    image: redis:7-alpine
+    container_name: mindexer-redis
+    command:
+      - redis-server
+      - --appendonly
+      - 'yes'
+      - --maxmemory
+      - 512mb
+      - --maxmemory-policy
+      - allkeys-lru
+    volumes:
+      - /opt/appdata/mindexer/redis:/data
+    mem_limit: 768m
+    restart: unless-stopped
+
+  torrent-indexer:
+    profiles:
+      - indexers-extra
+    image: ghcr.io/felipemarinho97/torrent-indexer:latest
+    container_name: torrent-indexer
+    environment:
+      PORT: '7006'
+      REDIS_HOST: torrent_indexer_redis
+      REDIS_PORT: '6379'
+      FLARESOLVERR_ADDRESS: http://flaresolverr:8191
+      FLARESOLVERR_TIMEOUT_SECONDS: '120'
+      REQUEST_TIMEOUT_MILLISECONDS: '15000'
+    depends_on:
+      - torrent_indexer_redis
+      - flaresolverr
+    ports:
+      - '7006:7006'
+    restart: unless-stopped
+
+  torrent_indexer_redis:
+    profiles:
+      - indexers-extra
+    image: redis:7-alpine
+    container_name: torrent-indexer-redis
+    restart: unless-stopped
+
+  series-renamer:
+    profiles:
+      - tools
+    build:
+      context: ./rename-series
+      dockerfile: Dockerfile
+    container_name: series-renamer
+    ports:
+      - '8085:8085'
+    environment:
+      APP_DATA_DIR: /config/series-renamer
+      SONARR_URL: http://sonarr:8989
+      SONARR_API_KEY: ''
+      JELLYFIN_URL: http://jellyfin:8096
+      JELLYFIN_API_KEY: ''
+      JELLYFIN_LIBRARY_ID: ''
+    volumes:
+      - /opt/appdata/jellyfin:/config
+      - /mnt/storage/movies:/media/movies
+      - /mnt/storage/series:/media/series
+      - /mnt/storage/cristaos:/media/cristaos
+      - /mnt/storage/Livros:/media/livros
+      - /mnt/storage/Audio-livros:/media/Audio-livros
+    depends_on:
+      - sonarr
+      - jellyfin
+    restart: unless-stopped
+
+  minio-downloads:
+    profiles:
+      - tools
+    build:
+      context: ./minio-downloader
+      dockerfile: Dockerfile
+    container_name: minio-downloader
+    environment:
+      TZ: Europe/Madrid
+      PORT: '5000'
+      WEB_CONCURRENCY: '2'
+      DEBUG_FFMPEG: '0'
+      DISABLE_VARIANT: '0'
+      SAVE_TO_LIBRARY: '1'
+      MEDIA_ROOT_SERIES: /media/series
+      MEDIA_ROOT_MOVIES: /media/movies
+      MEDIA_ROOT_CRISTAO: /media/cristaos
+      MEDIA_ROOT_AUDIOLIVROS_INFANTIL: /media/AudioLivros_infantil
+    volumes:
+      - /mnt/storage/series:/media/series
+      - /mnt/storage/movies:/media/movies
+      - /mnt/storage/cristaos:/media/cristaos
+      - /mnt/storage/AudioLivros_infantil:/media/AudioLivros_infantil
+      - /mnt/storage/minio-downloads/logs:/app/logs
+    ports:
+      - '8090:5000'
+    restart: unless-stopped
+
+  # plex:
+  #   profiles:
+  #     - legacy
+  #   image: plexinc/pms-docker:latest
+  #   container_name: plex
+  #   environment:
+  #     TZ: Europe/Madrid
+  #     PLEX_UID: '1000'
+  #     PLEX_GID: '1000'
+  #   volumes:
+  #     - /opt/appdata/plex:/config
+  #     - /opt/appdata/plex/transcode:/transcode
+  #     - /mnt/storage/movies:/media/movies:ro
+  #     - /mnt/storage/series:/media/series:ro
+  #     - /mnt/storage/cristaos:/media/cristaos:ro
+  #   ports:
+  #     - '32400:32400'
+  #   devices:
+  #     - /dev/dri:/dev/dri
+  #   restart: unless-stopped
+
+  # pihole:
+  #   profiles:
+  #     - dns-alt
+  #   image: pihole/pihole:latest
+  #   container_name: pihole
+  #   environment:
+  #     TZ: Europe/Madrid
+  #     WEBPASSWORD: change_me
+  #   volumes:
+  #     - /opt/appdata/pihole/etc-pihole:/etc/pihole
+  #     - /opt/appdata/pihole/etc-dnsmasq.d:/etc/dnsmasq.d
+  #   ports:
+  #     - '8081:80/tcp'
+  #     - '5353:53/tcp'
+  #     - '5353:53/udp'
+  #   restart: unless-stopped
+
+  media-finder:
+    build:
+      context: ./media-finder
+      dockerfile: Dockerfile
+    container_name: media-finder
+    environment:
+      APP_ENV: production
+      APP_PORT: '8091'
+      APP_SECRET_KEY: ${APP_SECRET_KEY:?set APP_SECRET_KEY in the environment}
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
+      DATABASE_URL: sqlite:////config/media-finder.db
+
+      QBITTORRENT_URL: http://qbittorrent:8080
+      QBITTORRENT_USERNAME: ${QBITTORRENT_USERNAME}
+      QBITTORRENT_PASSWORD: ${QBITTORRENT_PASSWORD}
+      QBITTORRENT_CATEGORY_MOVIE: ${QBITTORRENT_CATEGORY_MOVIE:-movies}
+      QBITTORRENT_CATEGORY_SERIES: ${QBITTORRENT_CATEGORY_SERIES:-series}
+      QBITTORRENT_CATEGORY_ANIME: ${QBITTORRENT_CATEGORY_ANIME:-}
+      QBITTORRENT_CATEGORY_OTHER: ${QBITTORRENT_CATEGORY_OTHER:-}
+      QBITTORRENT_CONNECT_TIMEOUT_SECONDS: ${QBITTORRENT_CONNECT_TIMEOUT_SECONDS:-5}
+      QBITTORRENT_OPERATION_TIMEOUT_SECONDS: ${QBITTORRENT_OPERATION_TIMEOUT_SECONDS:-15}
+      QBITTORRENT_HEALTH_TIMEOUT_SECONDS: ${QBITTORRENT_HEALTH_TIMEOUT_SECONDS:-5}
+
+      # TMDB
+      TMDB_ENABLED: ${TMDB_ENABLED:-true}
+      TMDB_AUTH_MODE: ${TMDB_AUTH_MODE:-bearer}
+      TMDB_API_KEY: ${TMDB_API_KEY}
+      TMDB_BASE_URL: ${TMDB_BASE_URL:-https://api.themoviedb.org/3}
+      TMDB_IMAGE_BASE_URL: ${TMDB_IMAGE_BASE_URL:-https://image.tmdb.org/t/p}
+      TMDB_LANGUAGE: ${TMDB_LANGUAGE:-pt-BR}
+      TMDB_REGION: ${TMDB_REGION:-ES}
+      TMDB_TIMEOUT_SECONDS: ${TMDB_TIMEOUT_SECONDS:-10}
+      TMDB_CACHE_TTL_SECONDS: ${TMDB_CACHE_TTL_SECONDS:-3600}
+      TMDB_MAX_RESULTS: ${TMDB_MAX_RESULTS:-20}
+      TMDB_MAX_CONCURRENCY: ${TMDB_MAX_CONCURRENCY:-3}
+      TMDB_ALLOW_HTTP: ${TMDB_ALLOW_HTTP:-false}
+
+      # Torrentio
+      TORRENTIO_ENABLED: ${TORRENTIO_ENABLED:-false}
+      TORRENTIO_MANIFEST_URL: ${TORRENTIO_MANIFEST_URL:-}
+      TORRENTIO_TIMEOUT_SECONDS: ${TORRENTIO_TIMEOUT_SECONDS:-20}
+      TORRENTIO_CACHE_TTL_SECONDS: ${TORRENTIO_CACHE_TTL_SECONDS:-120}
+      TORRENTIO_MAX_RESULTS: ${TORRENTIO_MAX_RESULTS:-200}
+      TORRENTIO_MAX_CONCURRENCY: ${TORRENTIO_MAX_CONCURRENCY:-2}
+
+      # MediaFusion
+      MEDIAFUSION_ENABLED: ${MEDIAFUSION_ENABLED:-false}
+      MEDIAFUSION_MANIFEST_URL: ${MEDIAFUSION_MANIFEST_URL:-}
+      MEDIAFUSION_TIMEOUT_SECONDS: ${MEDIAFUSION_TIMEOUT_SECONDS:-20}
+      MEDIAFUSION_CACHE_TTL_SECONDS: ${MEDIAFUSION_CACHE_TTL_SECONDS:-120}
+      MEDIAFUSION_MAX_RESULTS: ${MEDIAFUSION_MAX_RESULTS:-200}
+      MEDIAFUSION_MAX_CONCURRENCY: ${MEDIAFUSION_MAX_CONCURRENCY:-2}
+
+      # Stremio addons
+      STREMIO_ADDON_MAX_RESPONSE_BYTES: ${STREMIO_ADDON_MAX_RESPONSE_BYTES:-5242880}
+      STREMIO_ADDON_MAX_REDIRECTS: ${STREMIO_ADDON_MAX_REDIRECTS:-2}
+      STREMIO_ADDON_ALLOWED_SCHEMES: ${STREMIO_ADDON_ALLOWED_SCHEMES:-http,https}
+      STREMIO_ADDON_ALLOW_PRIVATE_HOSTS: ${STREMIO_ADDON_ALLOW_PRIVATE_HOSTS:-false}
+
+      # Metadata result store
+      METADATA_RESULT_TOKEN_TTL_SECONDS: ${METADATA_RESULT_TOKEN_TTL_SECONDS:-900}
+      METADATA_RESULT_STORE_MAX_ITEMS: ${METADATA_RESULT_STORE_MAX_ITEMS:-1000}
+      METADATA_SHOW_SPECIALS: ${METADATA_SHOW_SPECIALS:-false}
+
+      SONARR_URL: http://sonarr:8989
+      SONARR_API_KEY: ${SONARR_API_KEY}
+
+      RADARR_URL: http://radarr:7878
+      RADARR_API_KEY: ${RADARR_API_KEY}
+
+      PROWLARR_URL: http://prowlarr:9696
+      PROWLARR_API_KEY: ${PROWLARR_API_KEY}
+
+      JACKETT_URL: http://jackett:9117
+      JACKETT_API_KEY: ${JACKETT_API_KEY}
+
+      TORRENT_INDEXER_URL: http://torrent-indexer:7006
+    volumes:
+      - /opt/appdata/media-finder:/config
+    ports:
+      - '8091:8091'
+    depends_on:
+      - qbittorrent
+    restart: unless-stopped
+
+  portainer:
+    image: portainer/portainer-ce:latest
+    container_name: portainer
+    ports:
+      - '9443:9443'
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /opt/appdata/portainer:/data
+    restart: unless-stopped
+
+  streamystats:
+    image: ghcr.io/fredrikburmester/streamystats-aio:latest
+    container_name: streamystats
+    environment:
+      TZ: Europe/Madrid
+      NODE_ENV: production
+      SESSION_SECRET: "d524683f41e01099254d48af7c14edcd223223ff36e1aa56dc02eb93e2714466"
+      NEXT_SERVER_ACTIONS_ENCRYPTION_KEY: "GI2r0sCIDc6N/OAZFvSPncMTu3rgcJ+wl23FoZZ6u8w="
+      POSTGRES_USER: streamystats
+      POSTGRES_PASSWORD: "3826e372754c19f6fa2ff74df63d39ed577511a42889d005"
+      POSTGRES_DB: streamystats
+      DATABASE_URL: "postgresql://streamystats:3826e372754c19f6fa2ff74df63d39ed577511a42889d005@localhost:5432/streamystats"
+      CRON_EMBEDDINGS_SYNC: "30 3 * * *"
+      CRON_FULL_SYNC: "0 2 * * *"
+      SKIP_STARTUP_FULL_SYNC: "true"
+    volumes:
+      - /opt/appdata/streamystats:/var/lib/postgresql/data
+    ports:
+      - "3033:3000"
+    depends_on:
+      - jellyfin
+    mem_limit: 1536m
+    cpus: 2.0
+    stop_grace_period: 60s
+    restart: unless-stopped
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    environment:
+      TZ: Europe/Madrid
+      OLLAMA_NUM_PARALLEL: "1"
+      OLLAMA_MAX_LOADED_MODELS: "1"
+      OLLAMA_KEEP_ALIVE: "5m"
+    volumes:
+      - /opt/appdata/ollama:/root/.ollama
+    mem_limit: 2g
+    cpus: 4.0
+    restart: unless-stopped

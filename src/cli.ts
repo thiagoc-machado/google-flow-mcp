@@ -19,6 +19,7 @@ const HELP = `google-flow-mcp ${PACKAGE_VERSION}
 Usage:
   google-flow-mcp            Run the MCP server on stdio (default)
   google-flow-mcp serve
+  google-flow-mcp open       Open Google Flow in the dedicated Chrome profile
   google-flow-mcp init       Write a default config file (${configPath()})
   google-flow-mcp doctor     Check Chrome, CDP port, state dir, hung tabs and Flow login
   google-flow-mcp doctor --close-hung   Also close tabs whose renderer no longer responds
@@ -84,6 +85,25 @@ async function serve(): Promise<void> {
     state_dir: ctx.config.stateDir,
     cdp_port: ctx.config.cdpPort,
   });
+}
+
+async function openFlow(): Promise<void> {
+  const ctx = buildContext(loadConfig());
+  try {
+    const page = await ctx.session.ensureConnected();
+    await openFlowHome(page, ctx.config.flowUrl);
+    await new Promise<void>((resolve) => {
+      process.stdout.write(`Google Flow opened in Chrome: ${page.url()}\n`, () => resolve());
+    });
+    // Exit this helper without sending Browser.close over CDP; Chrome must remain open for the user.
+    process.exit(0);
+  } catch (err) {
+    const message = `Could not open Google Flow: ${err instanceof Error ? err.message : String(err)}\n`;
+    await new Promise<void>((resolve) => {
+      process.stderr.write(message, () => resolve());
+    });
+    process.exit(1);
+  }
 }
 
 function init(): void {
@@ -156,6 +176,9 @@ const cmd = process.argv[2] ?? 'serve';
 switch (cmd) {
   case 'serve':
     await serve();
+    break;
+  case 'open':
+    await openFlow();
     break;
   case 'init':
     init();

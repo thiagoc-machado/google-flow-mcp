@@ -12,6 +12,8 @@ export interface ReferenceIdentity {
 
 export interface CachedReference extends ReferenceIdentity {
   remoteId?: string;
+  /** Stable media ID that Flow places in the composer chip after selection. */
+  selectionId?: string;
   pending?: boolean;
 }
 
@@ -217,13 +219,19 @@ function parseCachedReference(value: unknown): CachedReference | undefined {
       return undefined;
     }
   }
-  if (!projectId || (v.remoteId !== undefined && typeof v.remoteId !== 'string')) return undefined;
+  if (
+    !projectId ||
+    (v.remoteId !== undefined && typeof v.remoteId !== 'string') ||
+    (v.selectionId !== undefined && typeof v.selectionId !== 'string')
+  )
+    return undefined;
   if (v.pending !== undefined && typeof v.pending !== 'boolean') return undefined;
   return {
     projectId,
     resolvedPath: v.resolvedPath,
     contentHash: v.contentHash,
     ...(typeof v.remoteId === 'string' ? { remoteId: v.remoteId } : {}),
+    ...(typeof v.selectionId === 'string' ? { selectionId: v.selectionId } : {}),
     ...(typeof v.pending === 'boolean' ? { pending: v.pending } : {}),
   };
 }

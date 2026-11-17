@@ -10,8 +10,9 @@ export function assertNoExcessOutputs(requested: number, returned: number, media
   );
 }
 
+export const COMPOSER_ACTION_PATTERN =
+  'prompt box|프롬프트 상자에 소재 추가|attach to prompt|arrow_forward|adicionar.{0,45}elementos.{0,30}caixa de comando|(?:add|adicionar)[^\\n]{0,50}(?:media|mídia|image|imagem|material|prompt|solicitação)|(?:prompt|solicitação)[^\\n]{0,50}(?:add|adicionar)';
+
 export function isComposerActionText(text: string): boolean {
-  return /prompt box|프롬프트 상자에 소재 추가|attach to prompt|arrow_forward|adicionar.{0,45}elementos.{0,30}caixa de comando|(?:add|adicionar)[^\n]{0,50}(?:media|mídia|image|imagem|material|prompt|solicitação)|(?:prompt|solicitação)[^\n]{0,50}(?:add|adicionar)/i.test(
-    text,
-  );
+  return new RegExp(COMPOSER_ACTION_PATTERN, 'i').test(text);
 }
